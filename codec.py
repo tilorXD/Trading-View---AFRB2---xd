@@ -9,6 +9,10 @@ import time
 import os
 from datetime import datetime, timedelta
 
+# --- ¡MODIFICADO! ---
+# Se elimina la importación de 'google_sheets_auth' de aquí.
+# Se llamará solo cuando se presione el botón de Google Drive.
+
 # --- CONFIGURACIÓN ---
 st.set_page_config(layout="wide", page_title="Analizador de Trades OKX")
 BASE_DIR = "datos_historicos"
@@ -21,6 +25,9 @@ if 'data_loaded' not in st.session_state:
     st.session_state.global_start = None
     st.session_state.global_end = None
 
+# --- ¡NUEVO! Session state para el origen de datos ---
+if 'data_source' not in st.session_state:
+    st.session_state.data_source = None # 'local' o 'drive'
 
 # ==========================================
 # 0. GESTOR DE ARCHIVOS (Sin cambios)
@@ -399,7 +406,7 @@ def generate_chart(df_velas, trade, moneda_selec, offset_horas, show_ema_9, show
             fig.add_hline(y=70, line_dash="dot", line_color="red", row=curr_row, col=1)
             fig.add_hline(y=30, line_dash="dot", line_color="green", row=curr_row, col=1)
         elif p['type'] == 'macd':
-            c = ['#26a69a' if h >= 0 else '#ef5350' for h in df_velas['Hist']]
+            c = ['#26a66a' if h >= 0 else '#ef5350' for h in df_velas['Hist']]
             fig.add_trace(go.Bar(x=df_velas['timestamp'], y=df_velas['Hist'], marker_color=c, name='Hist'), row=curr_row, col=1)
             fig.add_trace(go.Scatter(x=df_velas['timestamp'], y=df_velas['MACD'], line=dict(color='#2962ff', width=1), name='MACD'), row=curr_row, col=1)
             fig.add_trace(go.Scatter(x=df_velas['timestamp'], y=df_velas['Signal'], line=dict(color='#ff6d00', width=1), name='Sig'), row=curr_row, col=1)
@@ -447,11 +454,25 @@ def generate_chart(df_velas, trade, moneda_selec, offset_horas, show_ema_9, show
 # ==========================================
 # INTERFAZ DE USUARIO (SIDEBAR)
 # ==========================================
-st.title("📊 Visualizador Pro (Sistema de Archivos)")
+st.title("📊 Visualizador Pro (Sistema de Archivos) -  hola si wenas")
 
 # --- CONFIGURACIÓN SIDEBAR ---
+
+# --- ¡MODIFICADO! 1. Datos ---
 st.sidebar.header("1. Datos")
-archivo_subido = st.sidebar.file_uploader("Sube tu Excel/CSV", type=['xlsx', 'csv'])
+
+col1, col2 = st.sidebar.columns(2)
+
+if col1.button("🖥️ Subir Local", use_container_width=True):
+    st.session_state.data_source = 'local'
+
+if col2.button("☁️ Google Drive", use_container_width=True):
+    st.session_state.data_source = 'drive'
+
+# Placeholder para el widget de carga (file_uploader o info de GDrive)
+data_loader_placeholder = st.sidebar.empty()
+
+# --- Fin de la modificación ---
 
 st.sidebar.markdown("---")
 st.sidebar.header("2. Sincronización")
@@ -479,19 +500,69 @@ with st.sidebar.expander("📈 3. Indicadores", expanded=True):
 # LÓGICA PRINCIPAL
 # ==========================================
 
-# Cargar datos de trades primero
-if archivo_subido is not None:
-    df_trades = cargar_datos_usuario(archivo_subido)
-    if df_trades.empty or 'instId' not in df_trades.columns:
-        st.error("Archivo no válido o no contiene la columna 'instId'.")
-        st.stop()
-    
-    # --- ¡NUEVO! (Petición 1): Convertir ID a string para text_input ---
-    df_trades['id'] = df_trades['id'].astype(str)
+# Definir df_trades y archivo_subido al inicio
+df_trades = pd.DataFrame()
+archivo_subido = None 
 
-else:
-    st.info("Por favor, sube tu archivo de trades para comenzar.")
+# --- ¡MODIFICADO! Lógica de carga de datos ---
+
+if st.session_state.data_source == 'local':
+    with data_loader_placeholder.container():
+        archivo_subido = st.file_uploader("Sube tu Excel/CSV", type=['xlsx', 'csv'], key="local_uploader")
+    
+    if archivo_subido is not None:
+        df_trades = cargar_datos_usuario(archivo_subido)
+
+elif st.session_state.data_source == 'drive':
+    with data_loader_placeholder.container():
+        st.info("Cargando desde Google Drive...")
+        try:
+            # Importar aquí para que solo se active con el botón
+            from google_sheets_auth import sidebar_block
+            
+            # ¡IMPORTANTE!
+            # Asumo que 'sidebar_block()' ahora devuelve el dataframe.
+            # Debes modificar tu archivo 'google_sheets_auth.py'
+            # para que la función 'sidebar_block' (o la que sea)
+            # DEVUELVA el dataframe cargado.
+            
+            df_trades = sidebar_block() 
+            
+            if df_trades is None or df_trades.empty:
+                st.warning("No se cargaron datos de Google Drive.")
+                df_trades = pd.DataFrame() # Asegurar que sea un df vacío
+            else:
+                 st.success("Datos cargados desde Drive.")
+
+        except ImportError:
+            st.error("No se encontró 'google_sheets_auth.py'.")
+            df_trades = pd.DataFrame()
+        except Exception as e:
+            st.error(f"Error al cargar desde Google Drive: {e}")
+            df_trades = pd.DataFrame()
+
+# --- FIN Lógica de carga de datos ---
+
+
+# --- ¡MODIFICADO! Lógica de validación ---
+# Se ejecuta después del bloque de carga
+if df_trades.empty:
+    if st.session_state.data_source is None:
+        st.info("Por favor, selecciona un método de carga de datos (Local o Drive) en el panel lateral.")
+    elif st.session_state.data_source == 'local' and archivo_subido is None:
+        st.info("Por favor, sube tu archivo de trades para comenzar.")
+    elif st.session_state.data_source == 'drive':
+        # La lógica de GDrive ya muestra mensajes en el placeholder
+        pass
+    st.stop() # Detiene la ejecución si no hay datos
+
+# Si llegamos aquí, df_trades tiene datos
+if 'instId' not in df_trades.columns:
+    st.error("Archivo no válido o no contiene la columna 'instId'.")
     st.stop()
+
+# --- ¡NUEVO! (Petición 1): Convertir ID a string para text_input ---
+df_trades['id'] = df_trades['id'].astype(str)
 
 # --- 1. DECLARAR FILTROS (Fijos en la parte superior) ---
 monedas = df_trades['instId'].astype(str).unique()
@@ -505,7 +576,7 @@ with col_m1:
         except: pass
     moneda_selec = st.selectbox("Moneda", monedas, index=default_moneda_index)
 
-# (Petición 2: Filtro dependiente) - Esto ya estaba implementado
+# (Petición 2: Filtro dependiente)
 trades_moneda = df_trades[df_trades['instId'] == moneda_selec].copy()
 
 with col_m2:
@@ -514,10 +585,8 @@ with col_m2:
     default_trade_id_str = "" # Default vacío
     
     if st.session_state.trade_id and st.session_state.trade_id in trade_ids_list:
-        # Si el ID guardado en sesión es válido para esta moneda, usarlo
         default_trade_id_str = st.session_state.trade_id
     elif trade_ids_list:
-        # Si no, y la lista no está vacía, usar el primer ID de la lista
         default_trade_id_str = trade_ids_list[0]
     
     trade_id_input = st.text_input("Trade ID (copiar/pegar)", value=default_trade_id_str)
@@ -525,7 +594,6 @@ with col_m2:
 
 # Pre-rellenar fechas basado en el trade
 try:
-    # Usamos el 'trade_id_input' para encontrar la fecha
     trade_obj = trades_moneda[trades_moneda['id'] == trade_id_input].iloc[0]
     default_trade_date = pd.to_datetime(trade_obj['openTime'])
     if pd.isna(default_trade_date): default_trade_date = datetime.now()
@@ -551,12 +619,15 @@ chart_placeholder = st.empty()
 # --- LÓGICA DE CARGA (Tras presionar el botón) ---
 if apply_button:
     st.session_state.moneda = moneda_selec
-    st.session_state.trade_id = trade_id_input # Guardamos el valor del text_input
+    st.session_state.trade_id = trade_id_input 
     st.session_state.global_start = global_start
     st.session_state.global_end = global_end
     st.session_state.data_loaded = True
 
 if st.session_state.data_loaded:
+    # (El resto del script, desde la línea 624 en adelante, no necesita cambios)
+    # ...
+    
     # Recuperar valores del state para consistencia
     moneda = st.session_state.moneda
     trade_id_state = st.session_state.trade_id # Este es un string
@@ -615,7 +686,7 @@ if st.session_state.data_loaded:
         show_volume, show_oi
     )
     
-    # 4. AÑADIR ETIQUETA DE PRECIO ESTÁTICA (La "Opción A")
+    # 4. AÑADIR ETIQUETA DE PRECIO ESTÁTICA
     live_price = get_current_price(moneda)
     if live_price:
         last_close = df_velas['close'].iloc[-1]
@@ -638,33 +709,28 @@ if st.session_state.data_loaded:
     with chart_placeholder.container():
         st.plotly_chart(fig, use_container_width=True, config=config)
 
-    # 6. BUCLE DE PRECIO EN VIVO (Solo actualiza el header)
+    # 6. RENDERIZAR HEADER (una sola vez, sin bucle)
     close_price_compare = df_velas['close'].iloc[-1]
     
-    while True:
-        current_price_loop = get_current_price(moneda)
+    if live_price:
+        color_css = "#00ff00" if live_price >= close_price_compare else "#ff0000"
         
-        if current_price_loop:
-            color_css = "#00ff00" if current_price_loop >= close_price_compare else "#ff0000"
-            
-            header_placeholder.markdown(f"""
-                <div style="background-color: #1e1e1e; padding: 15px; border-radius: 10px; margin-bottom: 15px; border: 1px solid #333;">
-                    <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <div>
-                            <h2 style="margin:0; color: white; font-family: sans-serif;">{moneda}</h2>
-                            <span style="color: #888; font-size: 12px;">En vivo desde OKX</span>
-                        </div>
-                        <div style="text-align: right;">
-                            <span style="font-size: 36px; color: {color_css}; font-weight: bold; font-family: monospace;">
-                                {current_price_loop:,.4f}
-                            </span>
-                            <br>
-                            <span style="font-size: 12px; color: #666;">Actualizado: {datetime.now().strftime('%H:%M:%S')}</span>
-                        </div>
+        header_placeholder.markdown(f"""
+            <div style="background-color: #1e1e1e; padding: 15px; border-radius: 10px; margin-bottom: 15px; border: 1px solid #333;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <div>
+                        <h2 style="margin:0; color: white; font-family: sans-serif;">{moneda}</h2>
+                        <span style="color: #888; font-size: 12px;">En vivo desde OKX</span>
+                    </div>
+                    <div style="text-align: right;">
+                        <span style="font-size: 36px; color: {color_css}; font-weight: bold; font-family: monospace;">
+                            {live_price:,.4f}
+                        </span>
+                        <br>
+                        <span style="font-size: 12px; color: #666;">Actualizado: {datetime.now().strftime('%H:%M:%S')}</span>
                     </div>
                 </div>
-            """, unsafe_allow_html=True)
-        else:
-            header_placeholder.markdown(f"### {moneda} (Precio en vivo no disponible)")
-
-        time.sleep(1)
+            </div>
+        """, unsafe_allow_html=True)
+    else:
+        header_placeholder.markdown(f"### {moneda} (Precio en vivo no disponible)")
