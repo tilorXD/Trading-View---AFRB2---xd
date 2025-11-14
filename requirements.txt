@@ -5,3 +5,8 @@ ccxt
 numpy
 requests
 openpyxl
+
+
+google-auth
+google-auth-oauthlib
+google-api-python-client
